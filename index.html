@@ -393,17 +393,15 @@ html,body{overflow-x:hidden;background:#141414;color:#fff;font-family:'Helvetica
 
 <!-- PLAYER ESTILO NETFLIX -->
 <div id="player-overlay" onclick="playerTap()">
-  <!-- sem vídeo configurado -->
-  <div id="no-video-msg">
-    <div class="nv-ico">🎬</div>
-    <p>Coloque o link do seu vídeo no código:<br><code>VIDEO_URL = "seu_link.mp4"</code></p>
-    <button onclick="closePlayer();event.stopPropagation()">Voltar</button>
+  <!-- mensagem de erro/loading (oculta por padrão) -->
+  <div id="no-video-msg" style="display:none">
+    <div class="nv-ico">⏳</div>
+    <p id="no-video-txt">Carregando...</p>
+    <button id="no-video-btn" style="display:none" onclick="closePlayer();event.stopPropagation()">Voltar</button>
   </div>
 
-  <!-- video real (aparece quando VIDEO_URL definido) -->
-  <video id="player-vid" playsinline
-    onerror="document.getElementById('no-video-msg').style.display='block';this.style.display='none'">
-  </video>
+  <!-- video (oculto até carregar) -->
+  <video id="player-vid" playsinline style="display:none"></video>
 
   <!-- controles divididos em zonas de hover -->
   <div id="player-controls">
@@ -759,89 +757,94 @@ const po = ()=>document.getElementById('player-overlay');
 const pv = ()=>document.getElementById('player-vid');
 let ctrlTimer=null, playing=false;
 
-// Blob URL em cache para evitar baixar múltiplas vezes
+// ── PLAYER ──
 let _blobUrl = null;
+
+function _showMsg(icon, txt, showBtn){
+  const msg = document.getElementById('no-video-msg');
+  const vidEl = document.getElementById('player-vid');
+  msg.querySelector('.nv-ico').textContent = icon;
+  document.getElementById('no-video-txt').textContent = txt;
+  document.getElementById('no-video-btn').style.display = showBtn ? 'inline-block' : 'none';
+  msg.style.display = 'block';
+  vidEl.style.display = 'none';
+}
+
+function _hideMsg(){
+  document.getElementById('no-video-msg').style.display = 'none';
+}
 
 async function openPlayer(){
   closeModal();
-  const overlay=po(), vid=pv();
+  const overlay = po();
+  const vid     = pv();
   overlay.classList.add('on');
-  document.body.style.overflow='hidden';
-  showControls();
+  document.body.style.overflow = 'hidden';
 
-  if(!VIDEO_URL){
-    document.getElementById('no-video-msg').style.display='block';
-    vid.style.display='none';
-    return;
-  }
-
-  // Limpar listeners antigos
+  // Limpar listeners anteriores
   vid.oncanplay = vid.ontimeupdate = vid.onloadedmetadata = vid.onended = vid.onerror = null;
   vid.ontimeupdate     = updateProgress;
   vid.onloadedmetadata = updateProgress;
-  vid.onended          = ()=>{ playing=false; updatePP(); };
+  vid.onended          = () => { playing = false; updatePP(); };
 
-  // Se já temos o blob em cache, usar direto
+  // Se blob já em cache → tocar direto
   if(_blobUrl){
-    _loadAndPlay(vid, _blobUrl);
+    _hideMsg();
+    vid.style.display = 'block';
+    _doPlay(vid, _blobUrl);
+    showControls();
     return;
   }
 
-  // Mostrar loading no player
-  document.getElementById('no-video-msg').style.display='none';
-  vid.style.display='none';
-  const loadDiv = document.createElement('div');
-  loadDiv.id = 'player-loading';
-  loadDiv.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#fff';
-  loadDiv.innerHTML='<div style="font-size:48px;margin-bottom:12px">⏳</div><p style="font-size:14px">Carregando vídeo...</p>';
-  po().appendChild(loadDiv);
+  // Mostrar loading
+  _showMsg('⏳', 'Carregando vídeo...', false);
+  showControls();
 
   try {
-    // Fetch com tipo correto — contorna o MIME type errado do GitHub Pages
-    const resp = await fetch(VIDEO_URL);
-    if(!resp.ok) throw new Error('HTTP ' + resp.status);
-    const blob = await resp.blob();
-    // Forçar MIME type correto
-    const videoBlob = new Blob([blob], {type:'video/mp4'});
-    _blobUrl = URL.createObjectURL(videoBlob);
-    loadDiv.remove();
-    vid.style.display='block';
-    _loadAndPlay(vid, _blobUrl);
-  } catch(e){
-    loadDiv.remove();
-    const nm = document.getElementById('no-video-msg');
-    nm.innerHTML='<div class="nv-ico">⚠️</div>'+
-      '<p>Erro ao carregar <strong>'+VIDEO_URL+'</strong>.<br>'+e.message+'</p>'+
-      '<button onclick="closePlayer();event.stopPropagation()">Voltar</button>';
-    nm.style.display='block';
-    vid.style.display='none';
+    const resp = await fetch(VIDEO_URL, {cache: 'force-cache'});
+    if(!resp.ok) throw new Error('Arquivo não encontrado (HTTP ' + resp.status + ')');
+    const arrayBuf = await resp.arrayBuffer();
+    const blob     = new Blob([arrayBuf], {type: 'video/mp4'});
+    _blobUrl       = URL.createObjectURL(blob);
+
+    _hideMsg();
+    vid.style.display = 'block';
+    _doPlay(vid, _blobUrl);
+
+  } catch(err) {
+    console.error('Player error:', err);
+    _showMsg('⚠️', 'Erro: ' + err.message, true);
   }
 }
 
-function _loadAndPlay(vid, src){
-  if(vid.src !== src){ vid.src = src; vid.load(); }
-  vid.onerror = ()=>{ console.error('Erro no vídeo'); playing=false; updatePP(); };
+function _doPlay(vid, src){
+  if(vid.getAttribute('data-src') !== src){
+    vid.setAttribute('data-src', src);
+    vid.src = src;
+    vid.load();
+  }
+  vid.onerror = () => _showMsg('⚠️', 'Erro ao reproduzir o vídeo', true);
   vid.oncanplay = function(){
     vid.oncanplay = null;
     vid.play()
-      .then(()=>{ playing=true; updatePP(); })
-      .catch(()=>{ playing=false; updatePP(); showControls(); });
+      .then(() => { playing = true; updatePP(); })
+      .catch(() => { playing = false; updatePP(); showControls(); });
   };
 }
 
 function closePlayer(){
-  const overlay=po(), vid=pv();
+  const overlay = po(), vid = pv();
   overlay.classList.remove('on');
   overlay.classList.remove('show-ctrl');
   vid.pause();
-  vid.src='';
+  vid.removeAttribute('src');
+  vid.removeAttribute('data-src');
   vid.load();
-  playing=false;
-  document.body.style.overflow='';
+  vid.style.display = 'none';
+  playing = false;
+  document.body.style.overflow = '';
   clearTimeout(ctrlTimer);
-  // Remover loading se existir
-  const ld=document.getElementById('player-loading');
-  if(ld) ld.remove();
+  _hideMsg();
 }
 
 function playerTap(){
