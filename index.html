@@ -759,11 +759,15 @@ const po = ()=>document.getElementById('player-overlay');
 const pv = ()=>document.getElementById('player-vid');
 let ctrlTimer=null, playing=false;
 
-function openPlayer(){
+// Blob URL em cache para evitar baixar múltiplas vezes
+let _blobUrl = null;
+
+async function openPlayer(){
   closeModal();
   const overlay=po(), vid=pv();
   overlay.classList.add('on');
   document.body.style.overflow='hidden';
+  showControls();
 
   if(!VIDEO_URL){
     document.getElementById('no-video-msg').style.display='block';
@@ -771,57 +775,73 @@ function openPlayer(){
     return;
   }
 
-  document.getElementById('no-video-msg').style.display='none';
-  vid.style.display='block';
-
-  // Remover listeners antigos para não acumular
-  vid.oncanplay     = null;
-  vid.ontimeupdate  = null;
-  vid.onloadedmetadata = null;
-  vid.onended       = null;
-  vid.onerror       = null;
-
-  // Só definir src se mudou (evita reload desnecessário)
-  if(vid.src !== location.origin + '/' + VIDEO_URL && vid.getAttribute('src') !== VIDEO_URL){
-    vid.src = VIDEO_URL;
-    vid.load(); // forçar carregamento
-  }
-
+  // Limpar listeners antigos
+  vid.oncanplay = vid.ontimeupdate = vid.onloadedmetadata = vid.onended = vid.onerror = null;
   vid.ontimeupdate     = updateProgress;
   vid.onloadedmetadata = updateProgress;
   vid.onended          = ()=>{ playing=false; updatePP(); };
-  vid.onerror          = ()=>{
-    document.getElementById('no-video-msg').innerHTML =
-      '<div class="nv-ico">⚠️</div>' +
-      '<p>Não foi possível carregar <strong>' + VIDEO_URL + '</strong>.<br>' +
-      'Verifique se o arquivo está na raiz do repositório.</p>' +
-      '<button onclick="closePlayer();event.stopPropagation()">Voltar</button>';
-    document.getElementById('no-video-msg').style.display='block';
-    vid.style.display='none';
-  };
 
-  // Aguardar dados suficientes antes de dar play
+  // Se já temos o blob em cache, usar direto
+  if(_blobUrl){
+    _loadAndPlay(vid, _blobUrl);
+    return;
+  }
+
+  // Mostrar loading no player
+  document.getElementById('no-video-msg').style.display='none';
+  vid.style.display='none';
+  const loadDiv = document.createElement('div');
+  loadDiv.id = 'player-loading';
+  loadDiv.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#fff';
+  loadDiv.innerHTML='<div style="font-size:48px;margin-bottom:12px">⏳</div><p style="font-size:14px">Carregando vídeo...</p>';
+  po().appendChild(loadDiv);
+
+  try {
+    // Fetch com tipo correto — contorna o MIME type errado do GitHub Pages
+    const resp = await fetch(VIDEO_URL);
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    // Forçar MIME type correto
+    const videoBlob = new Blob([blob], {type:'video/mp4'});
+    _blobUrl = URL.createObjectURL(videoBlob);
+    loadDiv.remove();
+    vid.style.display='block';
+    _loadAndPlay(vid, _blobUrl);
+  } catch(e){
+    loadDiv.remove();
+    const nm = document.getElementById('no-video-msg');
+    nm.innerHTML='<div class="nv-ico">⚠️</div>'+
+      '<p>Erro ao carregar <strong>'+VIDEO_URL+'</strong>.<br>'+e.message+'</p>'+
+      '<button onclick="closePlayer();event.stopPropagation()">Voltar</button>';
+    nm.style.display='block';
+    vid.style.display='none';
+  }
+}
+
+function _loadAndPlay(vid, src){
+  if(vid.src !== src){ vid.src = src; vid.load(); }
+  vid.onerror = ()=>{ console.error('Erro no vídeo'); playing=false; updatePP(); };
   vid.oncanplay = function(){
     vid.oncanplay = null;
-    vid.play().then(()=>{ playing=true; updatePP(); }).catch(err=>{
-      console.warn('Autoplay bloqueado:', err);
-      // Mostrar botão de play manual
-      playing=false; updatePP();
-      showControls();
-    });
+    vid.play()
+      .then(()=>{ playing=true; updatePP(); })
+      .catch(()=>{ playing=false; updatePP(); showControls(); });
   };
-
-  showControls();
 }
 
 function closePlayer(){
   const overlay=po(), vid=pv();
   overlay.classList.remove('on');
   overlay.classList.remove('show-ctrl');
-  vid.pause(); vid.src='';
+  vid.pause();
+  vid.src='';
+  vid.load();
   playing=false;
   document.body.style.overflow='';
   clearTimeout(ctrlTimer);
+  // Remover loading se existir
+  const ld=document.getElementById('player-loading');
+  if(ld) ld.remove();
 }
 
 function playerTap(){
