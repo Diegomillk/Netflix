@@ -765,18 +765,52 @@ function openPlayer(){
   overlay.classList.add('on');
   document.body.style.overflow='hidden';
 
-  if(VIDEO_URL){
-    document.getElementById('no-video-msg').style.display='none';
-    vid.style.display='block';
-    vid.src=VIDEO_URL;
-    vid.play().then(()=>{playing=true;updatePP()}).catch(()=>{});
-    vid.addEventListener('timeupdate',updateProgress);
-    vid.addEventListener('loadedmetadata',updateProgress);
-    vid.addEventListener('ended',()=>{playing=false;updatePP()});
-  } else {
+  if(!VIDEO_URL){
     document.getElementById('no-video-msg').style.display='block';
     vid.style.display='none';
+    return;
   }
+
+  document.getElementById('no-video-msg').style.display='none';
+  vid.style.display='block';
+
+  // Remover listeners antigos para não acumular
+  vid.oncanplay     = null;
+  vid.ontimeupdate  = null;
+  vid.onloadedmetadata = null;
+  vid.onended       = null;
+  vid.onerror       = null;
+
+  // Só definir src se mudou (evita reload desnecessário)
+  if(vid.src !== location.origin + '/' + VIDEO_URL && vid.getAttribute('src') !== VIDEO_URL){
+    vid.src = VIDEO_URL;
+    vid.load(); // forçar carregamento
+  }
+
+  vid.ontimeupdate     = updateProgress;
+  vid.onloadedmetadata = updateProgress;
+  vid.onended          = ()=>{ playing=false; updatePP(); };
+  vid.onerror          = ()=>{
+    document.getElementById('no-video-msg').innerHTML =
+      '<div class="nv-ico">⚠️</div>' +
+      '<p>Não foi possível carregar <strong>' + VIDEO_URL + '</strong>.<br>' +
+      'Verifique se o arquivo está na raiz do repositório.</p>' +
+      '<button onclick="closePlayer();event.stopPropagation()">Voltar</button>';
+    document.getElementById('no-video-msg').style.display='block';
+    vid.style.display='none';
+  };
+
+  // Aguardar dados suficientes antes de dar play
+  vid.oncanplay = function(){
+    vid.oncanplay = null;
+    vid.play().then(()=>{ playing=true; updatePP(); }).catch(err=>{
+      console.warn('Autoplay bloqueado:', err);
+      // Mostrar botão de play manual
+      playing=false; updatePP();
+      showControls();
+    });
+  };
+
   showControls();
 }
 
